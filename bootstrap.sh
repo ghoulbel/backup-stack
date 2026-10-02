@@ -45,10 +45,22 @@ echo "==> Applying global defaults"
   --ignore-identical-snapshots=true
 
 # Tier 1: code + configuration. Small, changes often, backed up daily.
+# NOTE: --add-ignore only appends, so stale rules would survive re-runs and
+# silently win over the list below. Clear first, then add.
 echo "==> Policy: config (daily)"
+"${kopia_cmd[@]}" policy set /source --clear-ignore
 "${kopia_cmd[@]}" policy set /source \
   --snapshot-time-crontab "17 3 * * *" \
-  --add-ignore "ai-stack/data/" \
+  --add-ignore "ai-stack/data/ollama/models/" \
+  --add-ignore "ai-stack/data/ollama/cache/" \
+  --add-ignore "ai-stack/data/tts/" \
+  --add-ignore "ai-stack/data/qdrant/" \
+  --add-ignore "ai-stack/data/comfyui/models/" \
+  --add-ignore "ai-stack/data/comfyui/custom_nodes/" \
+  --add-ignore "ai-stack/data/comfyui/output/" \
+  --add-ignore "ai-stack/data/webui/cache/" \
+  --add-ignore "ai-stack/data/webui/vector_db/" \
+  --add-ignore "ai-stack/data/webui/webui.db.before-model-cleanup" \
   --add-ignore "ai-stack/crawl4ai-docs/.venv/" \
   --add-ignore "arr-stack/downloads/" \
   --add-ignore "arr-stack/cache/" \
@@ -71,6 +83,7 @@ echo "==> Policy: config (daily)"
 # Tier 2: *arr application state. Databases change constantly, so these get a
 # weekly schedule instead of daily to keep write volume on the NAS sane.
 echo "==> Policy: arr app state (weekly)"
+"${kopia_cmd[@]}" policy set /source/arr-stack/config --clear-ignore
 "${kopia_cmd[@]}" policy set /source/arr-stack/config \
   --snapshot-time-crontab "41 4 * * 0" \
   --add-ignore "*/cache/" \
