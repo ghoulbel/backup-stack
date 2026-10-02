@@ -1,0 +1,16 @@
+services:
+  kopia:
+    image: kopia/kopia:latest
+    container_name: kopia
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Zurich
+      - KOPIA_PASSWORD=${KOPIA_PASSWORD}
+    volumes:
+      - ./kopia:/app/config
+      - ../arr-stack/config:/source/arr-config:ro
+      - ../arr-stack/:/source/arr-root:ro
+      - ../monitoring-stack/prometheus:/source/prometheus:ro
+      - ../monitoring-stack/grafana:/source/grafana:ro
+      - ../monitoring-stack/homeassistant:/source/ha-config:ro
+      - /mnt/synology/backup/homelab:/backup
