@@ -2,15 +2,61 @@ services:
   kopia:
     image: kopia/kopia:latest
     container_name: kopia
+    # Pinned so the repository identity stays `root@kopia` across restarts.
+    # Without it every `compose run` gets a random container ID as hostname,
+    # which would spawn a new policy + maintenance owner per run.
+    hostname: kopia
     restart: unless-stopped
     environment:
       - TZ=Europe/Zurich
+      # Repository + UI credentials. Sourced from .env, never committed.
       - KOPIA_PASSWORD=${KOPIA_PASSWORD}
+      - KOPIA_LOG_LEVEL=${KOPIA_LOG_LEVEL:-info}
     volumes:
+      # Repository connection state, caches and logs.
       - ./kopia:/app/config
-      - ../arr-stack/config:/source/arr-config:ro
-      - ../arr-stack/:/source/arr-root:ro
-      - ../monitoring-stack/prometheus:/source/prometheus:ro
-      - ../monitoring-stack/grafana:/source/grafana:ro
-      - ../monitoring-stack/homeassistant:/source/ha-config:ro
+      # Repository destination on the Synology NAS (NFS).
       - /mnt/synology/backup/homelab:/backup
+      # All stacks + ai-project, read-only.
+      - ..:/source:ro
+    # `kopia server` runs the policy scheduler. The plain CLI does NOT
+    # snapshot on a schedule, it must be triggered externally.
+    command:
+      - server
+      - start
+      - --address=0.0.0.0:5151
+      # Plain HTTP is acceptable only because the published port is bound to
+      # 127.0.0.1. If you ever expose this beyond loopback, drop --insecure
+      # and use --tls-generate-cert / --tls-cert-file instead.
+      - --insecure
+      - --server-username=${KOPIA_SERVER_USER:-kopia}
+      - --server-password=${KOPIA_SERVER_PASSWORD}
+      - --enable-actions
+      - --log-scheduler
+      - --no-check-for-updates
+    # Bound to loopback: the UI exposes full repository + control API.
+    ports:
+      - "127.0.0.1:5151:5151"
+    healthcheck:
+      # The REST API needs a session cookie, so basic-auth the UI root instead:
+      # a 200 proves the server is up and the repository is connected.
+      test:
+        - CMD
+        - curl
+        - -fsS
+        - -o
+        - /dev/null
+        - -u
+        - ${KOPIA_SERVER_USER:-kopia}:${KOPIA_SERVER_PASSWORD}
+        - http://127.0.0.1:5151/
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
