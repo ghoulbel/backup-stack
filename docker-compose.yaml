@@ -19,6 +19,28 @@ services:
       - /mnt/synology/backup/homelab:/backup
       # All stacks + ai-project, read-only.
       - ..:/source:ro
+      # --- /hostconfig ---------------------------------------------------
+      # Host-local state that lives OUTSIDE Documents/ and is therefore in no
+      # git repository. Every one of these is impossible to regenerate:
+      #   cloudflared/  246b168c-*.json holds the TunnelSecret. It cannot be
+      #                 re-read or re-created -- the only alternative is a brand
+      #                 new tunnel, which means deleting and recreating all nine
+      #                 Cloudflare DNS records by hand.
+      #   ssh/          the private key that pushes all nine repos. Lose it and
+      #                 every repo needs a new deploy key.
+      #   secrets/      opencode API keys.
+      #   opencode/     config: which provider/model/endpoint the editor runs
+      #                 on, plus the codebase-index embedding provider.
+      #   hostconfig-*  fstab (the Synology NFS mount options) and the
+      #                 cloudflared systemd unit.
+      # Mounted read-only so a compromised or confused snapshot can never write
+      # back into your home directory. Kopia itself only ever reads these.
+      - ${HOME}/.cloudflared:/hostconfig/cloudflared:ro
+      - ${HOME}/.ssh:/hostconfig/ssh:ro
+      - ${HOME}/.config/secrets:/hostconfig/secrets:ro
+      - ${HOME}/.config/opencode:/hostconfig/opencode:ro
+      - ${HOME}/.config/hostconfig-fstab:/hostconfig/hostconfig-fstab:ro
+      - ${HOME}/.config/hostconfig-etc:/hostconfig/hostconfig-etc:ro
     # `kopia server` runs the policy scheduler. The plain CLI does NOT
     # snapshot on a schedule, it must be triggered externally.
     command:

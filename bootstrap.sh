@@ -137,6 +137,56 @@ echo "==> Policy: exclude the llama-cpp-lab playground entirely"
 "${kopia_cmd[@]}" policy set /source \
   --add-ignore "llama-cpp-lab/"
 
+# Tier 3: host-local configuration (/hostconfig).
+#
+# Everything above is inside Documents/ and therefore in git. /hostconfig is
+# the handful of files that live in your HOME directory and are in no repo at
+# all -- and every one of them is unrecoverable if this box dies:
+#
+#   cloudflared/246b168c-*.json  the TunnelSecret. There is no API to read it
+#                                back and no way to re-create it. The only
+#                                alternative is a brand new tunnel, which means
+#                                deleting and hand-recreating all nine DNS
+#                                records.
+#   ssh/id_ed25519               the key that pushes all nine repos.
+#   secrets/                     editor API keys.
+#   opencode/                    which provider/model the editor runs on.
+#   hostconfig-fstab             the Synology NFS mount options.
+#   hostconfig-etc/              the cloudflared systemd unit.
+#
+# Weekly is plenty: these change a few times a year, not a day.
+echo "==> Policy: host config (weekly)"
+if "${kopia_cmd[@]}" snapshot list /hostconfig >/dev/null 2>&1 \
+   || "${kopia_cmd[@]}" policy list 2>/dev/null | grep -q 'root@kopia:/hostconfig'; then
+  echo "    source already exists, refreshing policy"
+else
+  echo "    creating source /hostconfig"
+fi
+"${kopia_cmd[@]}" policy set /hostconfig --clear-ignore
+# --one-file-system=false is MANDATORY here and is NOT the default. /hostconfig
+# is a plain directory on the container's own overlay filesystem (st_dev 67)
+# holding SIX separate bind mounts inside it, all on a different device
+# (st_dev 66306). With oneFileSystem left at its default true, kopia refuses to
+# descend into a mount point on another device, so it scanned nothing at all:
+# two snapshots were created that reported files=0 dirs=1 size=0 while `find
+# /hostconfig -type f` counted 10217 files. --source does not hit this because
+# its snapshot root IS the bind mount, so everything beneath shares its st_dev.
+"${kopia_cmd[@]}" policy set /hostconfig \
+  --one-file-system=false \
+  --add-ignore "opencode/node_modules/**" \
+  --add-ignore "opencode/cache/**" \
+  --add-ignore "opencode/log/**" \
+  --add-ignore "opencode/tools/**" \
+  --add-ignore "opencode/global-index/**" \
+  --add-ignore "**/*.log" \
+  --add-ignore "**/.DS_Store" \
+  --snapshot-time-crontab "0 5 * * 0" \
+  --keep-latest 3 \
+  --keep-daily 7 \
+  --keep-weekly 8 \
+  --keep-monthly 12 \
+  --keep-annual 3
+
 echo "==> Policies:"
 "${kopia_cmd[@]}" policy list
 echo "==> Done. Start the stack with: docker compose up -d"
