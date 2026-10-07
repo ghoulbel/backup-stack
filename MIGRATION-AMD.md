@@ -12,6 +12,47 @@ depend on earlier ones.
 
 ---
 
+## Contents
+
+Phases run in this order. §3 is already done; it is listed so you know what happened.
+
+| § | what it is | when |
+|---|---|---|
+| [0](#0-the-one-paragraph-version) | the one-paragraph version | read first |
+| [1](#1-ground-rules--read-before-you-touch-anything) | **ground rules — read before touching anything** | read first |
+| [2](#2-inventory--what-exists-and-where-it-lives) | inventory: repos, irreplaceable files, what to copy vs re-download | read first |
+| [3](#3-phase-0--old-host-already-completed-2026-10-07) | Phase 0 — OLD HOST, **already completed 2026-10-07** | done |
+| [4](#4-phase-1--new-host-baseline) | Phase 1 — new host baseline (Tailscale, SSH, Docker, NFS) | **start here** |
+| [5](#5-the-amd-branches--what-actually-changes-on-amd) | the `amd` branches and what changes on AMD | during phase 1 |
+| [6](#6-phase-2--restore-the-secrets) | Phase 2 — fetch the secrets back out of Kopia | after §4 |
+| [7](#7-phase-3--bring-the-stacks-up-in-dependency-order) | Phase 3 — bring the stacks up in dependency order | after §6 |
+| [8](#8-phase-4--copy-the-17-gb-that-cannot-be-re-downloaded) | Phase 4 — copy the ~17 GB that cannot be re-downloaded | after §7 |
+| [9](#9-phase-5--the-cutover) | Phase 5 — the cutover, and the only moment you lose service | after §8 |
+| [10](#10-phase-6--verification-against-the-22-rules) | Phase 6 — verification, plus **rollback triggers** | end |
+| [11](#11-post-move-prove-the-backups-moved-too) | prove the backups moved | end |
+| [12](#12-post-move-cleanup) | cleanup | end |
+| [13](#13-kopia-cli-traps--read-before-you-debug-a-missing-file) | **Kopia CLI traps — read before debugging a "missing" file** | on demand |
+| [14](#14-verified-facts-about-this-estate) | verified facts about this estate | on demand |
+
+### Find it fast
+
+| you need to… | go to |
+|---|---|
+| know what order to do things in | §0, §1, then the Contents table above |
+| find the git remote for a stack | §2.1 |
+| know which files are **not** in git | §2.2 |
+| know what to copy vs re-download | §2.3 and §2.4 |
+| see what a stack's AMD config changes to | §5, then `git diff main..amd` in that repo |
+| get the `.env` files, `acme.json`, tunnel secret, SSH key or dumps back | **§6.0** |
+| bring a stack up | §7.1–§7.7, in that order |
+| move the new box onto `192.168.1.49` | §9.4, §9.5 |
+| know why `cloudflared` starts last | §9.7 |
+| decide whether to roll back | §10 rollback triggers |
+| understand a Kopia error or an empty result | §13 |
+| check a fact before trusting it | §14 |
+
+---
+
 ## 0. The one-paragraph version
 
 Everything here is either (a) in a git repo on GitHub, (b) in a Kopia snapshot on the NAS,
