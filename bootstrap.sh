@@ -122,6 +122,15 @@ echo "==> Policy: arr app state (weekly)"
   --add-ignore "nzbhydra2/backup/" \
   --add-ignore "nzbhydra2/logs/"
 
+# llama-cpp-lab holds 177 GB of GGUF model weights that were never added to any
+# ignore rule. They are re-downloadable from HuggingFace at any time, so every
+# nightly snapshot was re-uploading them: the daily Tier-1 snapshot grew from
+# 1.6 GB (Oct 3) to 212 GB (Oct 4) purely because of this. Model weights are not
+# state -- losing them costs bandwidth, not data.
+echo "==> Policy: llama model weights (177 GB, re-downloadable)"
+"${kopia_cmd[@]}" policy set /source \
+  --add-ignore "llama-cpp-lab/models/"
+
 echo "==> Policies:"
 "${kopia_cmd[@]}" policy list
 echo "==> Done. Start the stack with: docker compose up -d"
