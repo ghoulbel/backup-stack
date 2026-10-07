@@ -73,12 +73,32 @@ echo "==> Policy: config (daily)"
   --add-ignore "monitoring-stack/homeassistant/config/deps/" \
   --add-ignore "monitoring-stack/homeassistant/config/tts/" \
   --add-ignore "monitoring-stack/homeassistant/config/.cache/" \
+  --add-ignore "ai-project/intimacy-connection/data/" \
   --add-ignore "*/node_modules/" \
   --add-ignore "*/.venv/" \
   --add-ignore "*/venv/" \
   --add-ignore "*/__pycache__/" \
   --add-ignore "*/.git/objects/pack/tmp_*" \
   --add-ignore "backup-stack/kopia/"
+
+# The Authentik Postgres data directory is deliberately NOT snapshotted.
+#
+# Copying a live database directory is not a backup: Postgres is appending to its
+# WAL and rewriting pages while Kopia reads them, so the copy can capture a torn
+# page and fail recovery on restore — and it looks perfectly valid right up until
+# the day you need it. identity-stack/db-backup-loop.sh takes a real consistent
+# snapshot with pg_dump instead, writing to identity-stack/backups/, which this
+# policy DOES copy.
+#
+# The same reasoning applies to the embrace (intimacy-connection) Postgres: it is
+# covered by the weekly arr-style policy above for its config, and its live data
+# directory is ignored here too.
+echo "==> Adding live-database exclusions"
+"${kopia_cmd[@]}" policy set /source \
+  --add-ignore "identity-stack/data/postgres/" \
+  --add-ignore "identity-stack/data/authentik/" \
+  --add-ignore "identity-stack/data/media/" \
+  --add-ignore "identity-stack/data/certs/"
 
 # Tier 2: *arr application state. Databases change constantly, so these get a
 # weekly schedule instead of daily to keep write volume on the NAS sane.
