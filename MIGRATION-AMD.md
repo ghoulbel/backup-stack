@@ -67,7 +67,7 @@ Git identity on the old box: `ghoulbel <bel.g@gmx.ch>`.
 | Item | Where it lives now | Critical? |
 |---|---|---|
 | 8 `.env` files | Kopia `/hostconfig` snapshot `cfd4b5bbb7051581f20ad5fa4738679b` (verified) | **YES — irreplaceable** |
-| `proxy-stack/letsencrypt/acme.json` | Kopia `/source` snapshot `158c5f01c5322f8489fd564674cfeda0` (verified) | recoverable by re-issue, but copy it |
+| `proxy-stack/letsencrypt/acme.json` | Kopia `/source` snapshot `56520c6b1d55c7f027e467478924fe8a` (verified) | recoverable by re-issue, but copy it |
 | `~/.cloudflared/246b168c-…json` (TunnelSecret) | Kopia `/hostconfig` (md5-verified) | **YES — cannot be regenerated** |
 | `~/.cloudflared/config.yml` | Kopia `/hostconfig` (verified) | **YES** |
 | `~/.ssh/` (the key that pushes all 9 repos) | Kopia `/hostconfig` (fingerprint-verified) | **YES** |
@@ -108,8 +108,8 @@ Everything in this phase is **done**. Verify it, do not redo it.
 | 0.3 | Deleted the 501 MB dead `~/.config/opencode-broken` | gone |
 | 0.4 | `pg_dump` **embrace** | `ai-project/intimacy-connection/backups/embrace-20261007-170315.dump`, 67,537 B, real restore exit 0, row counts identical to production |
 | 0.5 | `pg_dump` **identity-stack** | `identity-stack/backups/authentik-20261007-170932.dump`, 5,381,321 B, real restore exit 0 |
-| 0.6 | Kopia snapshot `/source/arr-stack/config` | id `389a7703f812b9d78eb0f25836fdcf14` (was 4 days stale) |
-| 0.7 | Kopia snapshot `/source` | id `158c5f01c5322f8489fd564674cfeda0` |
+| 0.6 | Kopia snapshot `/source/arr-stack/config` | id `c3b77140b1e8010ce0fbad2f88b21820` (was 4 days stale) |
+| 0.7 | Kopia snapshot `/source` | id `56520c6b1d55c7f027e467478924fe8a`, root object `kb951366fd1d1b7295728565190233577` |
 | 0.8 | Kopia snapshot `/hostconfig` | id `cfd4b5bbb7051581f20ad5fa4738679b`, 81 files / 236 KB |
 | 0.9 | Restore-verify all ten critical objects | all md5 **IDENTICAL** to live |
 
@@ -284,9 +284,14 @@ need to see exactly what changed or cherry-pick a piece:
 
 | repo | branch | commit | what it does |
 |---|---|---|---|
-| `ai-stack` | `amd` | `d2b290c` | ollama → `OLLAMA_VULKAN=1` + `/dev/dri` + `/dev/kfd`; comfyui → ROCm install from `https://rocm.nightlies.amd.com/v2/gfx1151/` |
-| `arr-stack` | `amd` | `566d20d` | jellyfin → VAAPI `/dev/dri/renderD128` + `group_add` |
-| `monitoring-stack` | `amd` | `c8574cc` | dcgm-exporter removed; frigate behind the `disabled` compose profile; `nvidia_gpu` + `frigate` scrape jobs dropped |
+| `ai-stack` | `amd` | `4a36271` | rebuilt from `docker-compose.yaml.minix-recovered`: ollama → `ollama/ollama:rocm` + `/dev/kfd` `/dev/dri` + `OLLAMA_IGPU_ENABLE=1`; comfyui → `rocm/pytorch:latest` with `TORCH_BLAS_PREFER_HIPBLASLT=0`, `PYTORCH_HIP_ALLOC_CONF`, `--force-fp16 --cpu-vae --lowvram` |
+| `arr-stack` | `amd` | `cfd3de7` | rebuilt from `docker-compose.yaml.minix-backup`: jellyfin → `/dev/dri/renderD128` + render group |
+| `monitoring-stack` | `amd` | `5236eea` | rebuilt from `docker-compose.yaml.minix.copy`: `dcgm-exporter` → `kmulvey/radeon_exporter` as `amd-metrics-exporter`; frigate → `stable-rocm` + `LIBVA_DRIVER_NAME=radeonsi`; the GPU scrape job points at `amd-metrics-exporter:9200` |
+
+These are transcriptions of the compose files the MiniX actually ran with the same
+Radeon 890M, not something newly designed. The only substitution anywhere is the
+render group: `"993"` → `${RENDER_GID:?...}`, because 993 was `render` on the MiniX
+and is `sgx` here, where `render` is 990 (§4.7 resolves it).
 
 ```bash
 # review any of them before you trust it
@@ -351,8 +356,8 @@ K() { docker exec -e KOPIA_PASSWORD="$(grep '^KOPIA_PASSWORD=' .env | cut -d= -f
 mkdir -p /tmp/restore
 
 # example: pull one object out of the /source snapshot.
-# /source root object id is  k6cff0a1754ee67461da57d13b83956ed  (NOT the snapshot id)
-K show k6cff0a1754ee67461da57d13b83956ed/identity-stack/.env > /tmp/restore/identity-stack.env
+# /source root object id is  kb951366fd1d1b7295728565190233577  (NOT the snapshot id)
+K show kb951366fd1d1b7295728565190233577/identity-stack/.env > /tmp/restore/identity-stack.env
 ```
 
 Repeat for each of:
@@ -469,12 +474,40 @@ wait and re-check before debugging.
 
 ### 7.3 monitoring-stack
 
-```bash
-cd ~/Documents/monitoring-stack && docker compose up -d
+`prometheus/prometheus.yml` is **gitignored and host-local**, but `docker-compose.yaml`
+bind-mounts it read-only into the container:
+
+```
+- ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
 ```
 
-**Expect:** all containers `Up`; `up{job="prometheus"}` and the other scrape targets report
-`up=1` in Grafana. Frigate is intentionally absent on the `amd` branch.
+A fresh clone has only the tracked `prometheus.yml.example`. If you `up -d` without
+creating the live file, Docker creates a **directory** at that path and Prometheus
+exits with a config-file error. Create it first:
+
+```bash
+cd ~/Documents/monitoring-stack
+sed "s|REPLACE_WITH_HA_BEARER_TOKEN|$(grep '^HA_BEARER_TOKEN=' .env | cut -d= -f2-)|" \
+    prometheus/prometheus.yml.example > prometheus/prometheus.yml
+grep -c REPLACE_WITH prometheus/prometheus.yml     # must print 0
+```
+
+`prometheus.yml.example` on the `amd` branch already carries the `amd_gpu` job pointing
+at `amd-metrics-exporter:9200`, so do not hand-edit the job names.
+
+```bash
+docker compose up -d
+```
+
+**Expect:** all containers `Up`; `up{job="prometheus"}` and the other scrape targets
+report `up=1` in Grafana. On the `amd` branch the GPU target is `amd_gpu` and Frigate
+**is** present (it runs `stable-rocm` there — see §5). The renderer is
+`kmulvey/radeon_exporter`; if `amd_gpu` is down, check
+`docker logs amd-metrics-exporter` for a `/dev/dri` permission error and confirm
+`RENDER_GID` resolved in §4.7.
+
+> Frigate needs cameras. If they are not mounted on the new host, `up{job="frigate"}`
+> will be 0 — that is correct, not a fault.
 
 ### 7.4 arr-stack
 
