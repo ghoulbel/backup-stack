@@ -122,14 +122,20 @@ echo "==> Policy: arr app state (weekly)"
   --add-ignore "nzbhydra2/backup/" \
   --add-ignore "nzbhydra2/logs/"
 
-# llama-cpp-lab holds 177 GB of GGUF model weights that were never added to any
-# ignore rule. They are re-downloadable from HuggingFace at any time, so every
-# nightly snapshot was re-uploading them: the daily Tier-1 snapshot grew from
-# 1.6 GB (Oct 3) to 212 GB (Oct 4) purely because of this. Model weights are not
-# state -- losing them costs bandwidth, not data.
-echo "==> Policy: llama model weights (177 GB, re-downloadable)"
+# llama-cpp-lab is a PLAYGROUND, not homelab state, so the whole directory is
+# excluded. It held 177 GB of GGUF weights under models/ plus 35 GB of other
+# scratch, and nothing in it was ever in any ignore rule -- which is why the
+# nightly Tier-1 snapshot jumped from 1.6 GB (Oct 3) to 212 GB (Oct 4).
+#
+# This is safe because llama-cpp-lab is its own git repo with a remote
+# (git@github.com:ghoulbel/llama-cpp-lab.git, branch main) and nothing is
+# unpushed, so the code survives without Kopia. Two things are NOT recoverable
+# from that: its local .env (never committed), and any untracked benchmark
+# results under benchmarks/results/. If either starts to matter, give the repo
+# a .gitignore for .env and commit the results you care about.
+echo "==> Policy: exclude the llama-cpp-lab playground entirely"
 "${kopia_cmd[@]}" policy set /source \
-  --add-ignore "llama-cpp-lab/models/"
+  --add-ignore "llama-cpp-lab/"
 
 echo "==> Policies:"
 "${kopia_cmd[@]}" policy list
