@@ -66,7 +66,7 @@ Git identity on the old box: `ghoulbel <bel.g@gmx.ch>`.
 
 | Item | Where it lives now | Critical? |
 |---|---|---|
-| 8 `.env` files | Kopia `/hostconfig` snapshot `cfd4b5bbb7051581f20ad5fa4738679b` (verified) | **YES — irreplaceable** |
+| 9 `.env` files | Kopia `/hostconfig` snapshot `cfd4b5bbb7051581f20ad5fa4738679b` (verified) | **YES — irreplaceable** |
 | `proxy-stack/letsencrypt/acme.json` | Kopia `/source` snapshot `0ec8e3fbf38fed3ca33fec58ad051003` (verified) | recoverable by re-issue, but copy it |
 | `~/.cloudflared/246b168c-…json` (TunnelSecret) | Kopia `/hostconfig` (md5-verified) | **YES — cannot be regenerated** |
 | `~/.cloudflared/config.yml` | Kopia `/hostconfig` (verified) | **YES** |
@@ -161,7 +161,12 @@ returns an address on `100.x`.
 ### 4.2 SSH key
 
 ```bash
+# Restore it from Kopia first -- §6.0 step 4 writes it to /tmp/restore/id_ed25519.
+# It is the key that pushes all nine repos, so a fresh one means re-adding a deploy
+# key to every remote. Losing it is recoverable but annoying.
 mkdir -p ~/.ssh && chmod 700 ~/.ssh
+install -m 600 /tmp/restore/id_ed25519 ~/.ssh/id_ed25519
+install -m 644 /tmp/restore/id_ed25519.pub ~/.ssh/id_ed25519.pub 2>/dev/null || true
 # restore from Kopia, then:
 chmod 600 ~/.ssh/id_ed25519; chmod 644 ~/.ssh/id_ed25519.pub
 ssh -T git@github.com
@@ -343,7 +348,68 @@ change needed.
 
 Do this immediately after cloning, before starting anything.
 
-### 6.1 The eight `.env` files
+### 6.0 Fetch the objects out of Kopia
+
+You need Kopia's password and the repo config **on the old host**, because the repo
+lives on the NAS mounted there. Do this before the old box is switched off.
+
+`kopia show` takes a **root entry object id**, not the snapshot id. Passing the
+snapshot id silently returns nothing, and the md5 of nothing is
+`d41d8cd98f00b204e9800998ecf8427e`, so a swallowed error looks like a real mismatch.
+
+```bash
+mkdir -p /tmp/restore && cd ~/Documents/backup-stack
+K() { docker exec -e KOPIA_PASSWORD="$(grep '^KOPIA_PASSWORD=' .env | cut -d= -f2-)" \
+       kopia kopia "$@" --config-file=/app/config/repository.config; }
+
+# Discover these at run time. Do not copy the ids from this file: the playbook
+# itself is inside the snapshot, so any id written here goes stale the moment this
+# file changes. Only the newest snapshot has the configuration you want.
+rootobj() { K snapshot list "$1" --json 2>/dev/null \
+            | python3 -c "import sys,json;print(json.load(sys.stdin)[-1]['rootEntry']['obj'])"; }
+SRC=$(rootobj /source)
+HC=$(rootobj /hostconfig)
+echo "SRC=$SRC  HC=$HC"
+
+# As of 2026-10-07 these were:
+#   SRC=k966e58bb25e5a0e5d074b49e68e7fdd5   HC=k50a8fcb5247bf748d772ea3d8c0c0a60
+
+# 1. all nine .env files -- MASTER_KEY and AUTHENTIK_SECRET_KEY live in these,
+#    so never generate fresh values
+for f in identity-stack proxy-stack ai-stack arr-stack monitoring-stack backup-stack \
+         ai-project/intimacy-connection ai-project/pip-story-friend; do
+  mkdir -p "/tmp/restore/$(dirname "$f")"
+  K show "$SRC/$f/.env" > "/tmp/restore/$f.env"
+  chmod 600 "/tmp/restore/$f.env"
+done
+
+# 2. TLS certificate store
+K show "$SRC/proxy-stack/letsencrypt/acme.json" > /tmp/restore/acme.json
+
+# 3. database dumps
+K show "$SRC/identity-stack/backups/authentik-20261007-170932.dump" \
+  > /tmp/restore/authentik.dump
+K show "$SRC/ai-project/intimacy-connection/backups/embrace-20261007-170315.dump" \
+  > /tmp/restore/embrace.dump
+
+# 4. host-local config: tunnel secret, tunnel ingress, SSH key, fstab, unit file
+K show "$HC/cloudflared/246b168c-7c77-47e1-9a89-d89c1fdb293f.json" \
+  > /tmp/restore/246b168c-7c77-47e1-9a89-d89c1fdb293f.json
+K show "$HC/cloudflared/config.yml"  > /tmp/restore/cloudflared-config.yml
+K show "$HC/ssh/id_ed25519"          > /tmp/restore/id_ed25519
+K show "$HC/hostconfig-fstab"        > /tmp/restore/fstab
+K show "$HC/hostconfig-etc/cloudflared.service" > /tmp/restore/cloudflared.service
+```
+
+**Expect:** every file is non-empty. One line catches every failure mode at once,
+because the only way `kopia show` returns nothing is a wrong object id or a bad path:
+
+```bash
+find /tmp/restore -type f -empty    # must print nothing
+md5sum /tmp/restore/id_ed25519 ~/.ssh/id_ed25519   # must match
+```
+
+### 6.1 The nine `.env` files
 
 Every `.env` is gitignored, so a clone has none. Restore them from Kopia.
 
