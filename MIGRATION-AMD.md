@@ -67,7 +67,7 @@ Git identity on the old box: `ghoulbel <bel.g@gmx.ch>`.
 | Item | Where it lives now | Critical? |
 |---|---|---|
 | 8 `.env` files | Kopia `/hostconfig` snapshot `cfd4b5bbb7051581f20ad5fa4738679b` (verified) | **YES — irreplaceable** |
-| `proxy-stack/letsencrypt/acme.json` | Kopia `/source` snapshot `56520c6b1d55c7f027e467478924fe8a` (verified) | recoverable by re-issue, but copy it |
+| `proxy-stack/letsencrypt/acme.json` | Kopia `/source` snapshot `0ec8e3fbf38fed3ca33fec58ad051003` (verified) | recoverable by re-issue, but copy it |
 | `~/.cloudflared/246b168c-…json` (TunnelSecret) | Kopia `/hostconfig` (md5-verified) | **YES — cannot be regenerated** |
 | `~/.cloudflared/config.yml` | Kopia `/hostconfig` (verified) | **YES** |
 | `~/.ssh/` (the key that pushes all 9 repos) | Kopia `/hostconfig` (fingerprint-verified) | **YES** |
@@ -109,7 +109,7 @@ Everything in this phase is **done**. Verify it, do not redo it.
 | 0.4 | `pg_dump` **embrace** | `ai-project/intimacy-connection/backups/embrace-20261007-170315.dump`, 67,537 B, real restore exit 0, row counts identical to production |
 | 0.5 | `pg_dump` **identity-stack** | `identity-stack/backups/authentik-20261007-170932.dump`, 5,381,321 B, real restore exit 0 |
 | 0.6 | Kopia snapshot `/source/arr-stack/config` | id `c3b77140b1e8010ce0fbad2f88b21820` (was 4 days stale) |
-| 0.7 | Kopia snapshot `/source` | id `56520c6b1d55c7f027e467478924fe8a`, root object `kb951366fd1d1b7295728565190233577` |
+| 0.7 | Kopia snapshot `/source` | id `0ec8e3fbf38fed3ca33fec58ad051003`, root object `k966e58bb25e5a0e5d074b49e68e7fdd5` |
 | 0.8 | Kopia snapshot `/hostconfig` | id `cfd4b5bbb7051581f20ad5fa4738679b`, 81 files / 236 KB |
 | 0.9 | Restore-verify all ten critical objects | all md5 **IDENTICAL** to live |
 
@@ -356,8 +356,8 @@ K() { docker exec -e KOPIA_PASSWORD="$(grep '^KOPIA_PASSWORD=' .env | cut -d= -f
 mkdir -p /tmp/restore
 
 # example: pull one object out of the /source snapshot.
-# /source root object id is  kb951366fd1d1b7295728565190233577  (NOT the snapshot id)
-K show kb951366fd1d1b7295728565190233577/identity-stack/.env > /tmp/restore/identity-stack.env
+# /source root object id is  k966e58bb25e5a0e5d074b49e68e7fdd5  (NOT the snapshot id)
+K show k966e58bb25e5a0e5d074b49e68e7fdd5/identity-stack/.env > /tmp/restore/identity-stack.env
 ```
 
 Repeat for each of:
