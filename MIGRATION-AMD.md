@@ -331,6 +331,7 @@ need to see exactly what changed or cherry-pick a piece:
 | repo | branch | commit | what it does |
 |---|---|---|---|
 | `ai-stack` | `amd` | `4a36271` | rebuilt from `docker-compose.yaml.minix-recovered`: ollama → `ollama/ollama:rocm` + `/dev/kfd` `/dev/dri` + `OLLAMA_IGPU_ENABLE=1`; comfyui → `rocm/pytorch:latest` with `TORCH_BLAS_PREFER_HIPBLASLT=0`, `PYTORCH_HIP_ALLOC_CONF`, `--force-fp16 --cpu-vae --lowvram` |
+| `ai-stack` (2026-10-08) | `amd` | — | ollama switched from `ollama/ollama:rocm` to the standard image + RADV Vulkan (`GGML_VK_VISIBLE_DEVICES=0`, `OLLAMA_IGPU_ENABLE=1`) — stable warm throughput on the 890M |
 | `arr-stack` | `amd` | `cfd3de7` | rebuilt from `docker-compose.yaml.minix-backup`: jellyfin → `/dev/dri/renderD128` + render group |
 | `monitoring-stack` | `amd` | `5236eea` | rebuilt from `docker-compose.yaml.minix.copy`: `dcgm-exporter` → `kmulvey/radeon_exporter` as `amd-metrics-exporter`; frigate → `stable-rocm` + `LIBVA_DRIVER_NAME=radeonsi`; the GPU scrape job points at `amd-metrics-exporter:9200` |
 
