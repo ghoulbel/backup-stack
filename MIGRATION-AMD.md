@@ -978,6 +978,51 @@ Every one of these was measured, not assumed.
 
 ---
 
+## 16. Next-migration readiness — read BEFORE the next rebuild
+
+### 16.1 Model re-download manifest (no old box required)
+The 152G of ollama weights are EXCLUDED from Kopia by design. If the source box is dead, restore from this manifest:
+NAME                                                                         ID              SIZE      MODIFIED    
+qwen3.5:4b                                                                   3c3adf637187    3.4 GB    2 hours ago    
+qwen3.5:4b                                                                   96f38c742e0a    3.4 GB    2 hours ago    
+llamacpp:96f38c742e0a10e194b237d2ffb8b55925ebfeed9d27df72688f565e773569e7    96f38c742e0a    3.4 GB    2 hours ago    
+agents-a1:latest                                                             e3a7eb765f02    21 GB     3 days ago     
+qwen3.6-35b-a3b:latest                                                       78c38c7cfbd3    22 GB     3 days ago     
+glm-4.7-flash:latest                                                         9d767a211079    18 GB     3 days ago     
+ornith-1.5:9b                                                                e5df7dcdd8a2    6.6 GB    3 days ago     
+orcarouter/Qwen3.8-27B-Uncensored:q4_K_M                                     6fac2f98fdf7    17 GB     3 weeks ago    
+translategemma:12b-it-q4_K_M                                                 c2f9a9ca1ec7    8.1 GB    4 weeks ago    
+nomic-embed-text:latest                                                      0a109f422b47    274 MB    4 weeks ago    
+ornith-1.5:35b                                                               9f3b89b25219    22 GB     4 weeks ago    
+qwen3.8:27b-mtp-q4_K_M                                                       22130167c4c2    17 GB     4 weeks ago    
+gemma4:26b-a4b-it-mtp-q4_K_M                                                 08ae7ec1744b    18 GB     4 weeks ago    
+
+```bash
+# pull each tag from the registry (tolerate per-tag failures; log them)
+docker exec -d ollama sh -c 'for t in qwen3.5:4b llamacpp:96f38c742e0a10e194b237d2ffb8b55925ebfeed9d27df72688f565e773569e7 agents-a1:latest qwen3.6-35b-a3b:latest glm-4.7-flash:latest ornith-1.5:9b orcarouter/Qwen3.8-27B-Uncensored:q4_K_M translategemma:12b-it-q4_K_M nomic-embed-text:latest ornith-1.5:35b qwen3.8:27b-mtp-q4_K_M gemma4:26b-a4b-it-mtp-q4_K_M; do ollama pull "$t"; done'
+```
+Verify: `docker exec ollama ollama list | wc -l` matches the manifest row count.
+
+### 16.2 What's in Kopia vs what's not
+| Path | In Kopia? | Restore |
+|---|---|---|
+| `/source` (Documents) | YES — daily 17 3 * * * (excl. git tmp_*, venv, __pycache__, node_modules, ai-project/intimacy-connection/data/) | `kopia restore` newest snapshot |
+| `/hostconfig` (secrets) | YES — daily 0 5 * * * | `kopia restore` newest snapshot |
+| `ai-stack/data/ollama` | NO — by design | §16.1 manifest |
+| `ai-project/intimacy-connection/data/` | NO | pg_dump §7.7 |
+| media | NO (on Synology NFS) | rsync back from NAS |
+| `/tmp` | NO | disposable |
+
+### 16.3 Restore-test requirement
+After ANY restore: `kopia restore` one small file from the newest `/hostconfig` AND `/source` snapshot before declaring done — **a backup isn't proven until restored**.
+
+### 16.4 Pre-migration capture (do this BEFORE an old box dies)
+1. Run the §2 inventory. 2. `docker image ls` digests. 3. `ollama list` → append to this doc + push. This migration only worked because the old box woke up — do not rely on that.
+
+### 16.5 Standing user actions
+- Offsite 3-2-1 copy of the Kopia repo (the NAS is NOT offsite).
+- KOPIA_PASSWORD in a password manager + paper (§0.10).
+
 ## Completion appendix — 2026-10-08
 
 Migration completed 2026-10-08 by a later session. Interruption note: the previous
