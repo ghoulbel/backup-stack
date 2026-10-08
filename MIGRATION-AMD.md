@@ -975,3 +975,32 @@ Every one of these was measured, not assumed.
   history at `385203b`** and was pushed to the remote. It must be **rotated**, and purging
   the history needs `git filter-repo` plus a force-push.
 - **Only akadmin has MFA.** marina and moncef have no TOTP device. That is a rule-2 gap.
+
+---
+
+## Completion appendix — 2026-10-08
+
+Migration completed 2026-10-08 by a later session. Interruption note: the previous
+session's opencode build loop died 2026-10-08 08:26:48 UTC at loop step 40 on
+`AI_APICallError: Rate limit exceeded`.
+
+### Final verified state
+- 39 containers up across all stacks.
+- ollama: 11 models / 152 GB rsynced byte-identical from ROG-Strix; inference verified on
+  the 890M iGPU via the ollama rocm image.
+- Grafana crash-loop fixed by provisioning alert rules via `generate-alert-rules.py`
+  (Grafana 11 unified-alerting format).
+- SSO verified: sso ↔ openwebui 302 flow; 5/5 Authentik blueprints; embrace User=2.
+- Kopia snapshots taken from the new box; backup freshness metrics exported.
+- Rule 7 (single front door) and rule 19 pass.
+
+### Artifacts committed and pushed (secret-grepped before commit; clean)
+- ai-stack `amd`: `docker-compose.yaml` — `d2cbea5`
+- monitoring-stack `amd`: `docker-compose.yaml`, `datasources.yml`,
+  `generate-alert-rules.py`, `grafana/provisioning/alerting/homelab.yaml` — `4584520`
+- backup-stack `main`: `write-backup-metrics.sh` — `ce26615`
+
+### Remaining user actions
+- Decommission the ROG-Strix node in Tailscale.
+- Rotate the leaked OPENAI key (still in git history at `385203b`).
+- Optional: offsite copy of the Kopia repository (3-2-1).
