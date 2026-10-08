@@ -1,12 +1,13 @@
 services:
   kopia:
-    image: kopia/kopia:latest
+    image: kopia/kopia@sha256:89fd95ee2942880ca00eae964266958a394421ddbdf69bca62e38afc55f5900e
     container_name: kopia
     # Pinned so the repository identity stays `root@kopia` across restarts.
     # Without it every `compose run` gets a random container ID as hostname,
     # which would spawn a new policy + maintenance owner per run.
     hostname: kopia
     restart: unless-stopped
+    mem_limit: 256m
     environment:
       - TZ=Europe/Zurich
       # Repository + UI credentials. Sourced from .env, never committed.
