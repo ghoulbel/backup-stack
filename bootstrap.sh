@@ -1,192 +1,214 @@
 #!/usr/bin/env bash
-# Creates the Kopia repository and policies. Safe to re-run: it skips
-# creation when the repository already exists and only (re)applies policies.
+# ---------------------------------------------------------------------------
+# bootstrap.sh — host-level prerequisites for the whole homelab
+#
+# Creates the two external Docker networks that every stack joins, verifies
+# the host can actually support the architecture, and publishes the discovered
+# Tailscale address into the stacks that need it.
+#
+# Safe to re-run: existing networks are reused untouched, and .env values are
+# rewritten only when they actually differ.
+#
+# The Tailscale address is discovered rather than hardcoded on purpose. This
+# host is expected to be replaced, and a new server is handed a different
+# 100.x address — a stale literal would silently break the Authentik recovery
+# listener, which is the break-glass path of last resort.
+#
+# Usage:  ./bootstrap.sh [--check]
+#           --check   verify only, change nothing
+# ---------------------------------------------------------------------------
 set -euo pipefail
 
 cd "$(dirname "$0")"
-# shellcheck disable=SC1091
-set -a; . ./.env; set +a
 
-: "${KOPIA_PASSWORD:?KOPIA_PASSWORD missing from .env}"
-REPO_PATH=/backup
+CHECK_ONLY=false
+[[ "${1:-}" == "--check" ]] && CHECK_ONLY=true
 
-kopia_cmd=(docker compose run --rm -T kopia)
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+info() { printf '==> %s\n' "$*"; }
+warn() { printf 'WARN: %s\n' "$*" >&2; }
+ok()   { printf '  ok  %s\n' "$*"; }
 
-repo_exists() {
-  "${kopia_cmd[@]}" repository connect filesystem \
-    --path "$REPO_PATH" --password "$KOPIA_PASSWORD" >/dev/null 2>&1
+# network_exists <name>
+network_exists() { docker network inspect "$1" >/dev/null 2>&1; }
+
+# set_env_value <file> <KEY> <VALUE>
+# Idempotently sets KEY=VALUE, appending the key if absent. Keeps any other
+# lines (and their ordering) untouched so hand-edited .env files survive.
+set_env_value() {
+  local file=$1 key=$2 value=$3
+  if grep -qE "^${key}=" "$file" 2>/dev/null; then
+    local current
+    current=$(grep -m1 -E "^${key}=" "$file" | cut -d= -f2-)
+    [[ "$current" == "$value" ]] && return 0
+    # Value is quoted in .env files; compare after stripping quotes.
+    local bare=${current#\"}; bare=${bare%\"}
+    [[ "$bare" == "$value" ]] && return 0
+    sed -i "s|^${key}=.*|${key}=${value}|" "$file"
+  else
+    printf '%s=%s\n' "$key" "$value" >>"$file"
+  fi
 }
 
-if repo_exists; then
-  echo "==> Repository already present at $REPO_PATH, reusing it."
+# ---------------------------------------------------------------------------
+# 1. Prerequisites
+# ---------------------------------------------------------------------------
+info "Checking prerequisites"
+command -v docker >/dev/null 2>&1 || die "docker is not installed"
+docker info >/dev/null 2>&1 || die "cannot reach the docker daemon (add yourself to the 'docker' group)"
+ok "docker $(docker version --format '{{.Server.Version}}')"
+
+docker compose version >/dev/null 2>&1 || die "docker compose v2 is required"
+ok "compose $(docker compose version --short 2>/dev/null || echo v2)"
+
+if command -v tailscale >/dev/null 2>&1; then
+  TS_STATE=$(tailscale status --json 2>/dev/null \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["BackendState"])' 2>/dev/null || echo Unknown)
+  if [[ "$TS_STATE" == "Running" ]]; then
+    ok "tailscale ($TS_STATE)"
+  else
+    warn "tailscale installed but state is '$TS_STATE' — the recovery path needs it running"
+  fi
 else
-  echo "==> Creating filesystem repository at $REPO_PATH"
-  "${kopia_cmd[@]}" repository create filesystem \
-    --path "$REPO_PATH" \
-    --password "$KOPIA_PASSWORD" \
-    --cache-directory /app/cache
+  die "tailscale is not installed. Without it there is no break-glass path."
 fi
 
-# Retention is time-tiered rather than a single weekly count: configs change
-# often and are small, so a week of history costs almost nothing, while a
-# month-old copy still matters if a bad change went unnoticed.
-echo "==> Applying global defaults"
-"${kopia_cmd[@]}" policy set --global \
-  --keep-latest 20 \
-  --keep-hourly 0 \
-  --keep-daily 14 \
-  --keep-weekly 8 \
-  --keep-monthly 12 \
-  --keep-annual 3 \
-  --compression zstd \
-  --one-file-system=true \
-  --ignore-dir-errors=true \
-  --ignore-file-errors=true \
-  --ignore-identical-snapshots=true
+# Ports 80/443 belong to Traefik alone. Anything else squatting on them will
+# make the front door fail to bind later, which is confusing to debug then.
+for port in 80 443; do
+  if ss -tlnH "sport = :$port" 2>/dev/null | grep -q .; then
+    warn "port $port is already in use by: $(ss -tlnHp "sport = :$port" 2>/dev/null | grep -oP 'users:\(\("\K[^"]+' | sort -u | tr '\n' ' ')"
+  else
+    ok "port $port free"
+  fi
+done
 
-# Tier 1: code + configuration. Small, changes often, backed up daily.
-# NOTE: --add-ignore only appends, so stale rules would survive re-runs and
-# silently win over the list below. Clear first, then add.
-echo "==> Policy: config (daily)"
-"${kopia_cmd[@]}" policy set /source --clear-ignore
-"${kopia_cmd[@]}" policy set /source \
-  --snapshot-time-crontab "17 3 * * *" \
-  --add-ignore "ai-stack/data/ollama/models/" \
-  --add-ignore "ai-stack/data/ollama/cache/" \
-  --add-ignore "ai-stack/data/tts/" \
-  --add-ignore "ai-stack/data/qdrant/" \
-  --add-ignore "ai-stack/data/comfyui/models/" \
-  --add-ignore "ai-stack/data/comfyui/custom_nodes/" \
-  --add-ignore "ai-stack/data/comfyui/output/" \
-  --add-ignore "ai-stack/data/webui/cache/" \
-  --add-ignore "ai-stack/data/webui/vector_db/" \
-  --add-ignore "ai-stack/data/webui/webui.db.before-model-cleanup" \
-  --add-ignore "ai-stack/crawl4ai-docs/.venv/" \
-  --add-ignore "arr-stack/downloads/" \
-  --add-ignore "arr-stack/cache/" \
-  --add-ignore "arr-stack/config/" \
-  --add-ignore "monitoring-stack/prometheus_data/" \
-  --add-ignore "monitoring-stack/loki_data/" \
-  --add-ignore "monitoring-stack/grafana_data/" \
-  --add-ignore "monitoring-stack/alloy_data/" \
-  --add-ignore "monitoring-stack/homeassistant/config/.storage/" \
-  --add-ignore "monitoring-stack/homeassistant/config/deps/" \
-  --add-ignore "monitoring-stack/homeassistant/config/tts/" \
-  --add-ignore "monitoring-stack/homeassistant/config/.cache/" \
-  --add-ignore "ai-project/intimacy-connection/data/" \
-  --add-ignore "*/node_modules/" \
-  --add-ignore "*/.venv/" \
-  --add-ignore "*/venv/" \
-  --add-ignore "*/__pycache__/" \
-  --add-ignore "*/.git/objects/pack/tmp_*" \
-  --add-ignore "backup-stack/kopia/"
+# ---------------------------------------------------------------------------
+# 2. External networks
+# ---------------------------------------------------------------------------
+# proxy   carries human-facing traffic between Traefik and the apps.
+# backend is --internal: no route off the host at all. Databases and caches
+#         live here so nothing but their own stack can reach them.
+info "Ensuring Docker networks"
+for spec in "proxy:" "backend:--internal"; do
+  net=${spec%%:*}
+  flag=${spec#*:}
+  if network_exists "$net"; then
+    actual=$(docker network inspect "$net" --format '{{.Internal}}')
+    if [[ -n "$flag" && "$actual" != "true" ]]; then
+      die "network '$net' exists but is not --internal. Recreate it: docker network rm $net && docker network create $flag $net"
+    fi
+    ok "$net exists (internal=$actual)"
+  elif $CHECK_ONLY; then
+    warn "$net missing"
+  else
+    docker network create $flag "$net" >/dev/null
+    ok "$net created$( [[ -n "$flag" ]] && echo ' (internal)' )"
+  fi
+done
 
-# The Authentik Postgres data directory is deliberately NOT snapshotted.
-#
-# Copying a live database directory is not a backup: Postgres is appending to its
-# WAL and rewriting pages while Kopia reads them, so the copy can capture a torn
-# page and fail recovery on restore — and it looks perfectly valid right up until
-# the day you need it. identity-stack/db-backup-loop.sh takes a real consistent
-# snapshot with pg_dump instead, writing to identity-stack/backups/, which this
-# policy DOES copy.
-#
-# The same reasoning applies to the embrace (intimacy-connection) Postgres: it is
-# covered by the weekly arr-style policy above for its config, and its live data
-# directory is ignored here too.
-echo "==> Adding live-database exclusions"
-"${kopia_cmd[@]}" policy set /source \
-  --add-ignore "identity-stack/data/postgres/" \
-  --add-ignore "identity-stack/data/authentik/" \
-  --add-ignore "identity-stack/data/media/" \
-  --add-ignore "identity-stack/data/certs/"
-
-# Tier 2: *arr application state. Databases change constantly, so these get a
-# weekly schedule instead of daily to keep write volume on the NAS sane.
-echo "==> Policy: arr app state (weekly)"
-"${kopia_cmd[@]}" policy set /source/arr-stack/config --clear-ignore
-"${kopia_cmd[@]}" policy set /source/arr-stack/config \
-  --snapshot-time-crontab "41 4 * * 0" \
-  --add-ignore "*/cache/" \
-  --add-ignore "*/logs/" \
-  --add-ignore "*/log/" \
-  --add-ignore "*/Log/" \
-  --add-ignore "*/logs.*" \
-  --add-ignore "*/MediaCover/" \
-  --add-ignore "*/Sentry/" \
-  --add-ignore "*/Backups/" \
-  --add-ignore "*/restore/" \
-  --add-ignore "*/supervisord.log*" \
-  --add-ignore "*/transcodes/" \
-  --add-ignore "jellyfin/data/metadata/" \
-  --add-ignore "jellyfin/data/data/jellyfin.db*" \
-  --add-ignore "nzbhydra2/backup/" \
-  --add-ignore "nzbhydra2/logs/"
-
-# llama-cpp-lab is a PLAYGROUND, not homelab state, so the whole directory is
-# excluded. It held 177 GB of GGUF weights under models/ plus 35 GB of other
-# scratch, and nothing in it was ever in any ignore rule -- which is why the
-# nightly Tier-1 snapshot jumped from 1.6 GB (Oct 3) to 212 GB (Oct 4).
-#
-# This is safe because llama-cpp-lab is its own git repo with a remote
-# (git@github.com:ghoulbel/llama-cpp-lab.git, branch main) and nothing is
-# unpushed, so the code survives without Kopia. Two things are NOT recoverable
-# from that: its local .env (never committed), and any untracked benchmark
-# results under benchmarks/results/. If either starts to matter, give the repo
-# a .gitignore for .env and commit the results you care about.
-echo "==> Policy: exclude the llama-cpp-lab playground entirely"
-"${kopia_cmd[@]}" policy set /source \
-  --add-ignore "llama-cpp-lab/"
-
-# Tier 3: host-local configuration (/hostconfig).
-#
-# Everything above is inside Documents/ and therefore in git. /hostconfig is
-# the handful of files that live in your HOME directory and are in no repo at
-# all -- and every one of them is unrecoverable if this box dies:
-#
-#   cloudflared/246b168c-*.json  the TunnelSecret. There is no API to read it
-#                                back and no way to re-create it. The only
-#                                alternative is a brand new tunnel, which means
-#                                deleting and hand-recreating all nine DNS
-#                                records.
-#   ssh/id_ed25519               the key that pushes all nine repos.
-#   secrets/                     editor API keys.
-#   opencode/                    which provider/model the editor runs on.
-#   hostconfig-fstab             the Synology NFS mount options.
-#   hostconfig-etc/              the cloudflared systemd unit.
-#
-# Weekly is plenty: these change a few times a year, not a day.
-echo "==> Policy: host config (weekly)"
-if "${kopia_cmd[@]}" snapshot list /hostconfig >/dev/null 2>&1 \
-   || "${kopia_cmd[@]}" policy list 2>/dev/null | grep -q 'root@kopia:/hostconfig'; then
-  echo "    source already exists, refreshing policy"
-else
-  echo "    creating source /hostconfig"
+# ---------------------------------------------------------------------------
+# 3. Tailscale address
+# ---------------------------------------------------------------------------
+# Read once, used for the Authentik recovery listener. Deliberately NOT
+# published through Traefik: routing the IdP through the proxy that depends on
+# it is how you lock yourself out of your own IdP.
+TS_IP=$(tailscale ip -4 2>/dev/null || true)
+if [[ -z "$TS_IP" ]]; then
+  die "no Tailscale IPv4 address. Authentik cannot expose its recovery listener."
 fi
-"${kopia_cmd[@]}" policy set /hostconfig --clear-ignore
-# --one-file-system=false is MANDATORY here and is NOT the default. /hostconfig
-# is a plain directory on the container's own overlay filesystem (st_dev 67)
-# holding SIX separate bind mounts inside it, all on a different device
-# (st_dev 66306). With oneFileSystem left at its default true, kopia refuses to
-# descend into a mount point on another device, so it scanned nothing at all:
-# two snapshots were created that reported files=0 dirs=1 size=0 while `find
-# /hostconfig -type f` counted 10217 files. --source does not hit this because
-# its snapshot root IS the bind mount, so everything beneath shares its st_dev.
-"${kopia_cmd[@]}" policy set /hostconfig \
-  --one-file-system=false \
-  --add-ignore "opencode/node_modules/**" \
-  --add-ignore "opencode/cache/**" \
-  --add-ignore "opencode/log/**" \
-  --add-ignore "opencode/tools/**" \
-  --add-ignore "opencode/global-index/**" \
-  --add-ignore "**/*.log" \
-  --add-ignore "**/.DS_Store" \
-  --snapshot-time-crontab "0 5 * * 0" \
-  --keep-latest 3 \
-  --keep-daily 7 \
-  --keep-weekly 8 \
-  --keep-monthly 12 \
-  --keep-annual 3
+TS_DNS=$(tailscale status --json 2>/dev/null \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null || echo "")
 
-echo "==> Policies:"
-"${kopia_cmd[@]}" policy list
-echo "==> Done. Start the stack with: docker compose up -d"
+# Push into every stack that publishes on it.
+#
+# Two different consumers, same variable:
+#   identity-stack  the Authentik recovery listener (never via Traefik —
+#                   routing the IdP through the proxy that depends on it is
+#                   how you lock yourself out of your own IdP).
+#   ai-stack /      admin UIs and machine-to-machine services that must stay
+#   arr-stack /      reachable from anywhere on the tailnet without being
+#   monitoring-stack exposed to the whole LAN. Compose cannot read across
+#                   stack directories, so each one carries its own copy.
+if $CHECK_ONLY; then
+  warn "would publish TAILSCALE_IP=$TS_IP into the stack .env files"
+else
+  published=()
+  for dir in identity-stack ai-stack arr-stack monitoring-stack; do
+    [[ -d $dir ]] || continue
+    env_file="$dir/.env"
+    if [[ ! -f $env_file ]]; then
+      [[ -f $dir/.env.example ]] && cp "$dir/.env.example" "$env_file"
+      [[ -f $env_file ]] || continue
+      chmod 600 "$env_file"
+    fi
+    set_env_value "$env_file" "TAILSCALE_IP" "$TS_IP"
+    set_env_value "$env_file" "TAILSCALE_DNS" "$TS_DNS"
+    published+=("$dir/.env")
+  done
+  if ((${#published[@]})); then
+    ok "published TAILSCALE_IP=$TS_IP to: ${published[*]}"
+  else
+    ok "Tailscale address $TS_IP (no stack .env to publish to yet)"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 3b. GPU render group
+# ---------------------------------------------------------------------------
+# Published so containerised GPU consumers can be granted access to /dev/dri
+# without anyone hard-coding a group id.
+#
+# The number is HOST-SPECIFIC and has already bitten us once: 993 was `render`
+# on the old MiniX, but on ROG-Strix 993 is `sgx` and render is 990. A compose
+# file that hard-codes 993 there does not error -- the container simply cannot
+# open the render node and VAAPI transcoding silently degrades to CPU. So the
+# gid is resolved here, once, from the live host, and written into the stacks.
+#
+# Consumers:
+#   arr-stack (amd branch)   jellyfin via /dev/dri/renderD128 for VAAPI
+#   ai-stack  (amd branch)   ollama and comfyui via /dev/dri + /dev/kfd
+# Unused on the main (NVIDIA) branch, so publishing it everywhere is harmless.
+render_gid=$(getent group render 2>/dev/null | cut -d: -f3 || true)
+video_gid=$(getent group video 2>/dev/null | cut -d: -f3 || true)
+
+if [[ -z $render_gid ]]; then
+  warn "no 'render' group on this host -- skipping RENDER_GID publish."
+  warn "  Needed only for AMD/VAAPI. On NVIDIA it is simply unused."
+elif $CHECK_ONLY; then
+  warn "would publish RENDER_GID=$render_gid VIDEO_GID=${video_gid:-<none>} into stack .env files"
+else
+  gid_published=()
+  for dir in ai-stack arr-stack monitoring-stack; do
+    [[ -d $dir ]] || continue
+    env_file="$dir/.env"
+    [[ -f $env_file ]] || continue
+    set_env_value "$env_file" "RENDER_GID" "$render_gid"
+    [[ -n $video_gid ]] && set_env_value "$env_file" "VIDEO_GID" "$video_gid"
+    gid_published+=("$dir/.env")
+  done
+  if ((${#gid_published[@]})); then
+    ok "published RENDER_GID=$render_gid VIDEO_GID=${video_gid:-<none>} to: ${gid_published[*]}"
+  else
+    ok "render group is gid $render_gid (no stack .env to publish to yet)"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 4. Summary
+# ---------------------------------------------------------------------------
+printf '\n'
+if $CHECK_ONLY; then
+  info "Check complete. Nothing was changed."
+else
+  info "Bootstrap complete."
+fi
+cat <<EOF
+  Tailscale IP   ${TS_IP}
+  Tailscale DNS  ${TS_DNS:-<unavailable>}
+  Render GID     ${render_gid:-<none>}
+  Networks       proxy (routable), backend (internal, no egress)
+
+  Next: build identity-stack, then proxy-stack. Start each with:
+    ./bootstrap.sh --check && cd <stack> && docker compose up -d
+EOF
