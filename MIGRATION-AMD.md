@@ -807,13 +807,57 @@ Open all nine. Expect: `sso` 302, `traefik` 302, `grafana` 302 to `/login`, `ope
 | 2 | Authentik gates every human-facing service | each of the nine returns 302/401 anonymously | ✔ |
 | 3 | LAN does not bypass Authentik | `curl -k -H 'Host: openwebui.ghoulhub.uk' https://127.0.0.1/` from the LAN | 302 to sso |
 | 6 | M2M uses private networks, never interactive Authentik | ollama/searxng/prometheus reachable only on loopback + Tailscale | ✔ |
-| 7 | No app directly on the internet | `docker inspect <c> \| grep -c 0.0.0.0` | only traefik 80/443, homeassistant 8123, frigate 8554/8555, qbittorrent 6881 |
+| 7 | No app directly on the internet | see the note below this table — `grep -c 0.0.0.0` is **not** the right test | no non-front-door service resolves in public DNS or has a tunnel ingress rule |
 | 9 | No Traefik↔Authentik deadlock | `/etc/cloudflared/config.yml` has a `https://localhost:443` rule for every hostname | ✔ |
 | 11 | Minimal infrastructure | `docker network ls` | only `proxy` + `backend --internal` + per-stack bridges |
 | 14 | Authentik never publicly exposed | `docker inspect authentik-server` | ports on `127.0.0.1:9000` and `${TAILSCALE_IP}:9000` only |
 | 15 | Authentik break-glass works | `curl http://100.102.27.93:9000/if/flow/default-authentication-flow/` | 200 |
 | 18 | Backups exist and are restorable | see §11 | ✔ |
 | 19 | No secret in git | `git -C <repo> grep -nE 'cfut_\|sk-\|BEGIN PRIVATE KEY'` | 0 hits |
+
+#### Rule 7 — how to actually test it (corrected 2026-10-08)
+
+The original check was `docker inspect <c> | grep -c 0.0.0.0`, with a pass
+condition of "only traefik 80/443, homeassistant 8123, frigate 8554/8555,
+qbittorrent 6881". **That pass condition is stale.** It predates the arr-stack
+compose, which deliberately publishes the nine `*arr`/utility web UIs on
+`0.0.0.0` for phone-and-laptop administration. See the long comment above the
+`ports:` block in `arr-stack/docker-compose.yaml`: the tunnel routes none of
+them, so "LAN reachable" is the entire exposure, and each service authenticates
+itself before showing data.
+
+What rule 7 actually protects against is an app being reachable *from the
+internet*. A published `0.0.0.0` port is not that on its own — reachability from
+the internet is decided by DNS and by the tunnel. Test both, not the port:
+
+```bash
+# 1. nothing but the nine hostnames may resolve publicly
+for h in sso traefik grafana openwebui jellyseerr embrace pip jellyfin comfyui \
+         radarr sonarr lidarr prowlarr sabnzbd nzbhydra2 uptimekuma suggestarr qbittorrent; do
+  printf '  %-14s dns=%s\n' "$h" "$(getent hosts "$h.ghoulhub.uk" >/dev/null && echo RESOLVES || echo none)"
+done
+
+# 2. and none of the LAN-only services may have a tunnel ingress rule
+grep -cE 'radarr|sonarr|lidarr|prowlarr|sabnzbd|nzbhydra2|uptimekuma|suggestarr|qbittorrent' \
+  /etc/cloudflared/config.yml     # must print 0
+```
+
+**Expect:** every DNS entry is `none` and the grep prints `0`.
+
+Ports that must stay published, and why:
+
+| Port | Why it cannot move behind Traefik |
+|---|---|
+| `traefik` 80/443 | it *is* the front door |
+| `homeassistant` 8123 | bearer token, no cookie; LAN IoT devices depend on it. Not public — no DNS, no router |
+| `frigate` 8554/8555 | go2rtc RTSP + WebRTC stream distribution; a TV/NVR pulling a restream needs raw LAN |
+| `qbittorrentvpn` 6881 tcp+udp | inbound BitTorrent peer port; NAT traversal depends on it |
+
+The residual exposure the `arr-stack` compose comment names is real: guests and
+IoT devices on the home Wi-Fi can load those login pages. **ufw cannot close
+that** — on a flat subnet it cannot tell a guest apart from your own laptop.
+Closing it properly means putting guests and IoT on their own VLAN at the router.
+That is the only fix, and it is out of scope for the box itself.
 
 ### Rollback triggers — power the old box back off if ANY of these hold
 
