@@ -1004,3 +1004,13 @@ session's opencode build loop died 2026-10-08 08:26:48 UTC at loop step 40 on
 - Decommission the ROG-Strix node in Tailscale.
 - Rotate the leaked OPENAI key (still in git history at `385203b`).
 - Optional: offsite copy of the Kopia repository (3-2-1).
+
+## nvme0 merge — 2026-10-08
+
+Merged nvme0 (old broken minix install, VG `ubuntu-vg`, PV `nvme0n1p3`) into the running
+root VG `ubuntu-vg-1`: `vgremove ubuntu-vg` → `vgextend ubuntu-vg-1 /dev/nvme0n1p3` →
+`lvextend -l +100%FREE` → online `resize2fs`. Root LV grew 936G → ~1.9TB (LV <1.86 TiB,
+2 PVs, 1.5T free on /). nvme0 EFI p1 + /boot p2 left untouched; `/mnt/nvme0` umounted and
+aborted-run rsync temp files cleaned. Old minix data was already preserved by the user on
+a separate harddisk — NAS preservation skipped per user direction. All 39 containers
+unaffected and verified Up after the merge (sso/openwebui 302, swap 32G intact).
