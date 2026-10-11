@@ -40,7 +40,7 @@ print(int(datetime.datetime.fromisoformat(
 {
     echo '# HELP kopia_snapshot_age_seconds Age of the newest snapshot per source.'
     echo '# TYPE kopia_snapshot_age_seconds gauge'
-    for src in /source /hostconfig /source/arr-stack/config; do
+    for src in /source /hostconfig /source/arr-stack/config /docker-volumes/shopping-list-backend-data; do
         ts=$(snapshot_age "$src" || true)
         [ -n "$ts" ] || continue
         now=$(date +%s)

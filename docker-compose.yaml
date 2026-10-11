@@ -20,6 +20,8 @@ services:
       - /mnt/synology/backup/homelab:/backup
       # All stacks + ai-project, read-only.
       - ..:/source:ro
+      # shopping-list SQLite DB (docker named volume), read-only.
+      - /var/lib/docker/volumes/shopping-list_backend-data/_data:/docker-volumes/shopping-list-backend-data:ro
       # --- /hostconfig ---------------------------------------------------
       # Host-local state that lives OUTSIDE Documents/ and is therefore in no
       # git repository. Every one of these is impossible to regenerate:
